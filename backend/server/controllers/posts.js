@@ -1,5 +1,54 @@
+import bucket from '../../config/cloudstorage'
 import models from '../../database/models'
+import { convertToPostDto } from '../../dto/posts'
 import { Authentication } from '../../middlewares/authentication'
+
+// Upload a file to the storage, then create attachment object to be appended into the Database.
+async function uploadFileToCloud(file, postID) {
+    const newFilename = `${Date.now()}-${Math.random()
+        .toString(36)
+        .slice(-5)}-${file.name}`
+
+    // Moving a file from memory to disk.
+    // TODO : Preferbly we want to upload straight from memory.
+    await file.mv(`./images_upload/${newFilename}`, null)
+
+    // Uploading to the cloud storage
+    await bucket.upload(`./images_upload/${newFilename}`, {
+        destination: `Post_images/${newFilename}`,
+    })
+
+    // Creating a object for database.
+    await models.attachments.create({
+        postID,
+        attachmentLink: `Post_images/${newFilename}`,
+    })
+    console.log(`uploaded file : ${newFilename}`)
+}
+
+// Download a file from the storage
+async function downloadFileFromCloudStorage(filename) {
+    const options = {
+        destination: `images_download/${filename}`,
+    }
+    // Downloads the file
+    await bucket.file(`Post_images/${filename}`).download(options)
+    console.log(
+        `Post_images/${filename} downloaded to ${`Downloaded_images/${filename}`}.`
+    )
+}
+
+// Example method for downloading File from Cloud Storage
+export const getImage = async (req, res) => {
+    console.log('Fetching Image : received a query')
+    try {
+        downloadFileFromCloudStorage(req.body.attachments).catch(console.error)
+        res.status(201).send()
+    } catch (error) {
+        console.log(error)
+        res.status(500).send(error)
+    }
+}
 
 /*
 Requires authentication.
@@ -30,15 +79,24 @@ export const createPost = async (req, res) => {
                 /*
                 NOTE: attachments is currently a STRING type as the attachment functionality has not been setup yet.
                 */
-                const createNewPost = await models.posts.create({
+                const post = await models.posts.create({
                     text_content: body.text_content,
                     author: decodedUser.id,
                     parent: body.parent,
-                    usersLiked: 0,
-                    usersShared: 0,
-                    attachments: '',
                 })
-                res.status(201).send(createNewPost)
+                const postDTO = await convertToPostDto(post)
+
+                if (req.files) {
+                    const file = req.files.attachments
+                    if (!!file && file.constructor === Array) {
+                        file.forEach(async (x) => {
+                            uploadFileToCloud(x, post.id)
+                        })
+                    } else {
+                        uploadFileToCloud(file, post.id)
+                    }
+                }
+                res.status(201).send(postDTO)
             } else {
                 res.status(404).send({
                     'Error message': 'Parent with that id does not exist.',
@@ -64,7 +122,8 @@ export const getPostById = async (req, res) => {
         const { params } = req
         const post = await models.posts.findByPk(params.id)
         if (post != null) {
-            res.status(200).send(post)
+            const postDTO = await convertToPostDto(post)
+            res.status(200).send(postDTO)
         } else {
             res.status(404).send('ID not found.')
         }
@@ -108,15 +167,13 @@ export const modifyPostById = async (req, res) => {
                     const updated = await models.posts.update(
                         {
                             text_content: body.text_content,
-                            usersLiked: body.usersLiked,
-                            usersShared: body.usersShared,
                         },
                         { returning: true, where: { id: params.id } }
                     )
                     if (updated) {
                         res.status(200).send('The message has been updated.')
                     } else {
-                        res.status(400).send('Update failed.')
+                        res.status(500).send('Failed to update the post.')
                     }
                 } else {
                     res.status(403).send('Invalid author ID.')
@@ -158,15 +215,15 @@ export const deletePostById = async (req, res) => {
                 // Check whether the post being deleted belongs to that user.
                 const post = await models.posts.findByPk(params.id)
                 if (!post) {
-                    res.status(404).send('Invalid message ID.')
+                    res.status(404).send('Invalid post ID.')
                 } else if (post.author === decodedUser.id) {
                     const count = await models.posts.destroy({
                         where: { id: params.id },
                     })
                     if (count !== 0) {
-                        res.status(200).send('The message has been deleted.')
+                        res.status(200).send('The post has been deleted.')
                     } else {
-                        res.status(400).send('Failed to update.')
+                        res.status(500).send('Failed to destroy the post.')
                     }
                 } else {
                     res.status(403).send('Invalid author ID.')
