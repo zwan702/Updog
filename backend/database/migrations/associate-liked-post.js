@@ -1,5 +1,3 @@
-'use strict'
-
 module.exports = {
     async up(queryInterface, Sequelize) {
         queryInterface.createTable('likedPosts', {
@@ -22,7 +20,7 @@ module.exports = {
         })
     },
 
-    async down(queryInterface, Sequelize) {
-        queryInterface.dropTable('likedPost')
+    async down(queryInterface) {
+        queryInterface.dropTable('likedPosts')
     },
 }
